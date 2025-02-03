@@ -1,0 +1,422 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class TankController : BaseController
+{
+    #region Variables
+    [Header("Tank Controller")]    
+    [SerializeField]
+    float maxVelocity = 1.0f;
+    
+    [SerializeField]
+    float velocity = 1.0f;
+    
+    [SerializeField]
+    float rotationSpeed = 1.0f;       
+
+    Rigidbody _rigidBody;       
+
+    [SerializeField]
+    GameObject cameraObject;    
+    
+    public enum StateEnum { Starting, Idle, MoveForward, MoveBackward, RotateInPlace, Destroyed }
+
+    [SerializeField]
+    StateEnum state = StateEnum.Starting;
+   
+    [SerializeField]
+    float startingEngineDuration = 1.0f;
+
+    [Serializable]
+    public class FXData
+    {
+        public GameObject smockParticlesPrefab;
+       
+        public SoundFXData soundFXs = new SoundFXData();
+    }
+
+    [Serializable]
+    public class SoundFXData
+    {
+        public AudioSource IdleSoundPlayer;
+        public AudioClip IdleSound;
+        public AudioSource MoveSoundPlayer;
+        public AudioClip StartingSound;
+        public AudioClip MoveForwardSound;
+        public AudioClip MoveBackwardSound;
+        public AudioClip RotateSound;
+        public AudioSource TurretRotateSoundPlayer;
+        public AudioClip TurretRotateSound;
+       
+        //   public List<AudioClip> IdleSoundsList = new List<AudioClip>();
+        //   public List<AudioClip> MoveForwardSoundsList = new List<AudioClip>();
+        //   public List<AudioClip> MoveBackwardSoundsList = new List<AudioClip>();
+        //   public List<AudioClip> MoveRotateInPlaceSoundsList = new List<AudioClip>();
+    }
+    [SerializeField]
+    private FXData fXs = new FXData();
+
+    [SerializeField]
+    ScrollMyTexture track1TextureScroller;
+    [SerializeField]
+    ScrollMyTexture track2TextureScroller;
+    [SerializeField]
+    float forwardScrollSpeed = 0;
+    [SerializeField]
+    float backwardScrollSpeed = 0;
+    [SerializeField]
+    float WheelsRotationSpeedMultiplier = 3;
+    [SerializeField]
+    List<Transform> WheelsLeftList = new List<Transform>();
+
+    [SerializeField]
+    List<Transform> WheelsRightList = new List<Transform>();
+
+    public delegate void MessageEvent();
+    public static event MessageEvent WinGame;
+    #endregion Variables
+
+    private void Start()
+    {
+        _rigidBody = GetComponent<Rigidbody>();
+        cameraObject = FindObjectOfType<Camera>().gameObject;
+    }
+
+    private void OnEnable()
+    {
+        BaseController.TurretDestroyed += EnemyTurretDestroyed;
+    }
+
+    public void StartEngine()
+    {
+        fXs.soundFXs.MoveSoundPlayer.enabled = true;
+        fXs.soundFXs.MoveSoundPlayer.PlayOneShot(fXs.soundFXs.StartingSound);
+        Invoke("StartIdleSound", startingEngineDuration/2);
+        Invoke("EngineStarted", startingEngineDuration);
+    }
+    public void StartIdleSound()
+    {
+        fXs.soundFXs.IdleSoundPlayer.enabled = true;
+        fXs.soundFXs.IdleSoundPlayer.loop = true;
+        fXs.soundFXs.MoveSoundPlayer.clip = fXs.soundFXs.IdleSound;
+        fXs.soundFXs.MoveSoundPlayer.Play();
+    }       
+    void EngineStarted()
+    {
+        state = StateEnum.Idle;
+        fXs.soundFXs.MoveSoundPlayer.loop = true;
+    }
+
+    void Update()
+    {
+        if (!GameStarted)
+            return;
+
+        if (state == StateEnum.Starting)
+            return;
+
+        UpdateInput();
+        UpdateAudio();
+    }
+
+    void UpdateAudio()
+    {
+        if (state != StateEnum.Idle)
+        {
+            if (state == StateEnum.MoveForward
+                && fXs.soundFXs.MoveSoundPlayer.clip != fXs.soundFXs.MoveForwardSound)
+            {
+                fXs.soundFXs.MoveSoundPlayer.Stop();
+                fXs.soundFXs.MoveSoundPlayer.clip = fXs.soundFXs.MoveForwardSound;
+                fXs.soundFXs.MoveSoundPlayer.Play();
+            }
+            else if (state == StateEnum.MoveBackward
+                && fXs.soundFXs.MoveSoundPlayer.clip != fXs.soundFXs.MoveBackwardSound)
+            {
+                fXs.soundFXs.MoveSoundPlayer.Stop();
+                fXs.soundFXs.MoveSoundPlayer.clip = fXs.soundFXs.MoveBackwardSound;
+                fXs.soundFXs.MoveSoundPlayer.Play();
+            }
+            else if (state == StateEnum.RotateInPlace
+                && fXs.soundFXs.MoveSoundPlayer.clip != fXs.soundFXs.RotateSound)
+            {
+                fXs.soundFXs.MoveSoundPlayer.Stop();
+                fXs.soundFXs.MoveSoundPlayer.clip = fXs.soundFXs.RotateSound;
+                fXs.soundFXs.MoveSoundPlayer.Play();
+            }
+        }
+        else
+        {
+            fXs.soundFXs.MoveSoundPlayer.Stop();
+            fXs.soundFXs.MoveSoundPlayer.clip = null;
+        }
+    }
+
+    void UpdateInput()
+    {
+        HandleTankVelocity();
+        HandleTankRotation();
+        HandleTankCanonRotation();
+        HandleFire();
+    }
+    
+    #region Movement & rotation
+    void HandleTankVelocity()
+    {
+        // get the input and move the tank forward and backward depending of the max velocity
+        if (Input.GetAxis("Vertical") > 0 || Input.GetKey(KeyCode.Z))
+        {
+            transform.Translate(Vector3.forward * (Time.deltaTime * maxVelocity));
+            state = StateEnum.MoveForward;
+
+            ScrollLeftWheels(forwardScrollSpeed);
+            ScrollTexturesForwardY();
+        }
+        else if (Input.GetAxis("Vertical") < 0 || Input.GetKey(KeyCode.S))
+        {
+            transform.Translate(Vector3.back * (Time.deltaTime * maxVelocity));
+            state = StateEnum.MoveBackward;
+
+            ScrollLeftWheels(backwardScrollSpeed);
+            ScrollTexturesBackwardY();
+        }
+        else
+        {
+            StopScrollTexturesY();
+
+            state = StateEnum.Idle;
+        }
+    }
+    void HandleTankRotation()
+    {
+        if (Input.GetAxis("Horizontal") > 0)
+        {
+
+            // rotate Horizontally the body of the tank by getting the input value and multiplying it by the rotation speed
+            transform.Rotate(0.0f, Input.GetAxis("Horizontal") * rotationSpeed, 0.0f, Space.World);
+
+            if (state == StateEnum.Idle && (Input.GetAxis("Vertical") == 0 || Input.GetKey(KeyCode.None)))
+            {
+                state = StateEnum.RotateInPlace;
+                ScrollTexturesRotateRightY();
+            }
+        }
+        else if (Input.GetAxis("Horizontal") < 0)
+        {
+
+            // rotate Horizontally the body of the tank by getting the input value and multiplying it by the rotation speed
+            transform.Rotate(0.0f, Input.GetAxis("Horizontal") * rotationSpeed, 0.0f, Space.World);
+
+            if (state == StateEnum.Idle && (Input.GetAxis("Vertical") == 0 || Input.GetKey(KeyCode.None)))
+            {          
+                state = StateEnum.RotateInPlace;
+                ScrollTexturesRotateLeftY();
+            }
+        }
+        else if (Input.GetAxis("Vertical") == 0 || Input.GetKey(KeyCode.None) )
+        {
+            state = StateEnum.Idle;
+
+            StopScrollTexturesY();
+        }
+
+    }
+
+    #region Tracks Wheels Rotation
+    private void ScrollLeftWheels(float value)
+    {
+        for (int i = 0; i < WheelsLeftList.Count; i++)
+        {
+            WheelsLeftList[i].Rotate(value* WheelsRotationSpeedMultiplier, 0.0f, 0.0f, Space.Self);
+        }
+    }
+
+    private void ScrollRightWheels(float value)
+    {
+        for (int i = 0; i < WheelsRightList.Count; i++)
+        {
+            WheelsRightList[i].Rotate(value * WheelsRotationSpeedMultiplier, 0.0f, 0.0f, Space.Self);
+        }
+    }
+    #endregion Tracks Wheels Rotation
+
+    #region Tracks Texture Scrolling
+    private void ScrollTexturesForwardY()
+    {
+        if (track1TextureScroller != null)
+            track1TextureScroller.scrollSpeedY = forwardScrollSpeed;
+        if (track2TextureScroller != null)
+            track2TextureScroller.scrollSpeedY = forwardScrollSpeed;
+
+        ScrollLeftWheels(forwardScrollSpeed);
+        ScrollRightWheels(forwardScrollSpeed);
+    }
+
+    private void ScrollTexturesBackwardY()
+    {
+        if (track1TextureScroller != null)
+            track1TextureScroller.scrollSpeedY = backwardScrollSpeed;
+        if (track2TextureScroller != null)
+            track2TextureScroller.scrollSpeedY = backwardScrollSpeed;
+
+
+        ScrollLeftWheels(backwardScrollSpeed);
+        ScrollRightWheels(backwardScrollSpeed);
+    }
+      
+    private void StopScrollTexturesY()
+    {
+        if (track1TextureScroller != null)
+            track1TextureScroller.scrollSpeedY = 0;
+        if (track2TextureScroller != null)
+            track2TextureScroller.scrollSpeedY = 0;
+    }
+    
+    private void ScrollTexturesRotateLeftY()
+    {
+        if (track1TextureScroller != null)
+            track1TextureScroller.scrollSpeedY = backwardScrollSpeed;
+        if (track2TextureScroller != null)
+            track2TextureScroller.scrollSpeedY = forwardScrollSpeed;
+
+        ScrollLeftWheels(backwardScrollSpeed);
+        ScrollRightWheels(forwardScrollSpeed);
+    }
+   
+    private void ScrollTexturesRotateRightY()
+    {
+        if (track1TextureScroller != null)
+            track1TextureScroller.scrollSpeedY = forwardScrollSpeed;
+        if (track2TextureScroller != null)
+            track2TextureScroller.scrollSpeedY = backwardScrollSpeed;
+
+        ScrollLeftWheels(forwardScrollSpeed);
+        ScrollRightWheels(backwardScrollSpeed);
+    }
+    #endregion Tracks Texture Scrolling
+
+    #region Turret & Canon Movs
+    public GameObject GetTurretObj()
+    {
+        return CanonTurret;
+    }
+
+    public void HandleTankCanonRotation()
+    {
+        // Stick the position of the tank turret to its position on the tank
+        CanonTurret.transform.position = TurretParent.transform.position;
+        TurretParent.transform.rotation = transform.rotation;
+        // Synchronize the rotation of the turret and the camera lookat direction
+        // by calculating the degrees to rotate arround the 3 axes from x and z of the turret rotation
+        // and the y of the main camera.        
+        CanonTurret.transform.localRotation =
+            Quaternion.Euler(TurretParent.transform.localRotation.x,
+            Camera.main.transform.eulerAngles.y, TurretParent.transform.localRotation.z);
+
+        float CanonEulerAngle = Camera.main.transform.eulerAngles.x - CanonEulerAnglesOffset;
+
+        if (Camera.main.transform.eulerAngles.x < CanonMinEulerAngle)
+        {
+            Canon.transform.localRotation = Quaternion.Euler(Camera.main.transform.eulerAngles.x - CanonEulerAnglesOffset,
+                   Canon.transform.localRotation.y, Canon.transform.localRotation.z);
+        }
+    }
+
+    public void HandleTurretRotateSound()
+    {
+        if (fXs.soundFXs.TurretRotateSoundPlayer.clip != fXs.soundFXs.TurretRotateSound)
+        {
+            fXs.soundFXs.TurretRotateSoundPlayer.enabled = true;
+            fXs.soundFXs.TurretRotateSoundPlayer.loop = true;
+            fXs.soundFXs.TurretRotateSoundPlayer.clip = fXs.soundFXs.TurretRotateSound;
+            fXs.soundFXs.TurretRotateSoundPlayer.Play();
+        }
+    }
+
+    public void StopTurretRotateSound()
+    {
+        fXs.soundFXs.TurretRotateSoundPlayer.Stop();
+        fXs.soundFXs.TurretRotateSoundPlayer.clip = null;
+    }
+    #endregion Turret & Canon Movs
+
+#endregion Movement & rotation
+
+    #region Firing
+    void HandleFire()
+    {
+        if (Input.GetKey(KeyCode.Mouse0))
+        {
+            Fire();
+        }        
+    }
+
+    private void EnemyTurretDestroyed()
+    {
+        // add one destroyed turret to counter
+        DestroyedTurrets = DestroyedTurrets + 1;
+        uiManager.SetDestroyedTurretsDisplay(tankController.DestroyedTurrets);
+
+        // verify if all turrets are destroyed
+        VerifyDestroyedTurretsAmount();
+    }
+
+
+    void VerifyDestroyedTurretsAmount() // verify if all ennemy turrets are destroyed
+    {
+        // verify if all turrets are destroyed
+        if (DestroyedTurrets == TurretAmount)
+            WinGame?.Invoke();            
+    }
+    #endregion Firing
+
+    #region Heal
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other.transform.tag == "HealPlatform")
+        {
+            StartHeal(other.transform);
+        }
+    }
+    private void OnTriggerExit(Collider other)
+    {
+        if (other.transform.tag == "HealPlatform")
+        {
+            EndHeal(other.transform);
+        }
+    }
+
+    void StartHeal(Transform healerTransform)
+    {
+        healerTransform.GetComponent<AudioSource>().Play();
+        InvokeRepeating("Healing", 0, HealingRate);       
+    }
+
+    void Healing()
+    {
+        int tmpLife = LifePoint;
+        if (LifePoint < MaxLifePoint)
+        {
+            tmpLife = LifePoint + HealingAmount;            
+        }
+        
+        if (tmpLife > MaxLifePoint)
+        {
+            tmpLife = MaxLifePoint;
+        }
+        LifePoint = tmpLife;
+
+        // update UI about life points
+        if (IsPlayer)
+            uiManager.SetLifePointsDisplay(LifePoint);
+    }
+
+    void EndHeal(Transform healerTransform)
+    {
+        healerTransform.GetComponent<AudioSource>().Stop();
+        CancelInvoke("Healing");
+    }
+    #endregion Heal
+}
